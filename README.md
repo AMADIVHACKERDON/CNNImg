@@ -1,6 +1,6 @@
 # CNNImg
 Classification of satellite images
-# NetworkData_Model
+# CNNPRO
 
 ## Artificial Interferogram Generation, Multi-Channel Filtering and Convolutional Autoencoder
 
