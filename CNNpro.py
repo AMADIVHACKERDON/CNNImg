@@ -1,4 +1,5 @@
 
+
 import numpy as np
 import math
 from scipy.signal import convolve as Conv
@@ -159,6 +160,7 @@ for epoch in range(epochs):
             total_loss = total_loss + loss.item()
         avg_loss = total_loss / len(filtered_loader)
         print(f"Epoch [{epoch+1}/{epochs}], Loss: {avg_loss:6f}")
+
 model.eval()
 with torch.no_grad():
     (filtered_x,) = next(iter(filtered_loader))
@@ -181,33 +183,277 @@ with torch.no_grad():
     plt.show()
 
 
+
+
+latents = []
+labels = []
+
 model.eval()
 
 latents = []
 labels = []
 
+model.eval()
+
 with torch.no_grad():
-    for (filtered_x,) in filtered_loader:
+
+    for i in range(32):
+
+        Image, label = train_dataset[i]
+
+        # YOUR EXISTING INTERFEROGRAM CODE
+        Image = Image.squeeze(0).numpy()
+
+        H, W = Image.shape
+
+        y, filtered_x = np.meshgrid(
+            np.arange(H),
+            np.arange(W),
+            indexing="ij"
+        )
+
+        amplitude = Image / Image.max()
+
+        phase_obj = 2 * np.pi * amplitude
+
+        object_wave = amplitude * np.exp(1j * phase_obj)
+
+        angle = np.pi / 6
+
+        phase_ref = (
+            2 * np.pi *
+            (
+                filtered_x * np.cos(angle)
+                + y * np.sin(angle)
+            ) / 8
+        )
+
+        ref_wave = np.exp(1j * phase_ref)
+
+        interfero = np.abs(object_wave + ref_wave) ** 2
+
+        interfer = (
+            interfero - interfero.min()
+        ) / (
+            interfero.max() - interfero.min()
+        )
+
+        # YOUR EXISTING 13 FILTERS
+        filter_i = []
+
+        for k in range(NK):
+
+            Out = Conv(
+                interfer,
+                K[:, :, k],
+                mode="same"
+            )
+
+            filter_i.append(Out)
+
+        # Convert the 13 filtered images
+        filter_im = np.stack(filter_i, axis=0)
+
+        filtered_x = torch.tensor(
+            filter_im,
+            dtype=torch.float32
+        )
+
+        filtered_x = filtered_x.unsqueeze(0)
+
         filtered_x = filtered_x.to(device)
+
+        # SEND THIS IMAGE THROUGH THE AUTOENCODER
         z = model.encoder(filtered_x)
 
+        # Remove batch dimension
+        z = z.squeeze(0)
+
+        # Save the latent representation
         latents.append(z.cpu())
-        
-latents = torch.cat(latents, dim =0)
+
+        # Save its label
+        labels.append(label)
+
+
+latents = torch.stack(latents)
+labels = torch.tensor(labels)
+
+print("Latents shape:", latents.shape)
+print("Labels shape:", labels.shape)
+
 print("Latents shape:", latents.shape)
 sample_features = latents
 print(sample_features.shape)
 print("First feature map shape:", sample_features[0].shape)
 
-print("i have reacg plot")
+
 plt.figure(figsize=(12,12))
 
 for i in range(64):
     plt.subplot(8,8,i+1)
-    plt.imshow(sample_features[i].detach().numpy(),cmap="gray")
+    plt.imshow(sample_features[0][i].detach().numpy(),cmap="gray")
 
     plt.title(f"f{i+1}")
     plt.axis("off")
 
 plt.tight_layout()
-plt.show
+plt.show()
+
+class blk(nn.Module):
+    def __init__(self, in_channels, out_channels, identity_downsample= None, stride=1):
+        super(blk, self).__init__()
+        self.expansion = 4
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=1,padding=0)
+        self.bn1 = nn.BatchNorm2d(out_channels)
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=stride, padding=1)
+        self.bn2 = nn.BatchNorm2d(out_channels)
+        self.conv3 = nn.Conv2d(out_channels, out_channels*self.expansion, kernel_size=1, stride=1, padding=0)
+        self.bn3 = nn.BatchNorm2d(out_channels*self.expansion)
+        self.relu = nn.ReLU()
+        self.identity_downsample = identity_downsample
+
+    def forward(self,x):
+        identity = x
+
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+        x = self.conv2(x)
+        
+        x = self.bn2(x)
+        x = self.relu(x)
+        x = self.conv3(x)
+        x = self.bn3(x)
+
+        
+
+        if self.identity_downsample is not None:
+            identity = self.identity_downsample(identity)
+
+        x += identity
+        x = self.relu(x)
+
+        return x
+
+class ResNet (nn.Module):
+    def __init__(self, block, layers, image_channels, num_classes):
+        super(ResNet, self).__init__()
+        self.in_channels = 64
+        self.conv1 = nn.Conv2d(image_channels, 64, kernel_size=7, stride=2, padding=3)
+        self.bn1 = nn.BatchNorm2d(64)
+        self.relu = nn.ReLU()
+        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+
+        self.layer1 = self.make_layer(block, layers[0], out_channels=64, stride=1)
+        self.layer2 = self.make_layer(block, layers[1], out_channels=128, stride=2)
+        self.layer3 = self.make_layer(block, layers[2], out_channels=256, stride=2)
+        self.layer4 = self.make_layer(block, layers[3], out_channels=512, stride=2)
+
+        self.avgpool = nn.AdaptiveAvgPool2d((1,1))
+        self.fc = nn.Linear(512*4, num_classes)
+    def forward(self,x):
+            
+            x = self.conv1(x)
+            
+            x = self.bn1(x)
+            x = self.relu(x)
+            x = self.maxpool(x)
+            
+            x = self.layer1(x)
+            
+            x = self.layer2(x)
+            x = self.layer3(x)
+            x = self.layer4(x)
+    
+            x = self.avgpool(x)
+            x = x.reshape(x.shape[0], -1)
+
+            x = self.fc(x)
+            return x
+        
+
+    def make_layer(self, block, num_residual_blocks, out_channels, stride):
+        identity_downsample = None
+        layers = []
+
+        if stride != 1 or self.in_channels !=4:
+            identity_downsample = nn.Sequential(nn.Conv2d(self.in_channels, out_channels*4, kernel_size=1,stride=stride),nn.BatchNorm2d(out_channels*4))
+            layers.append(block(self.in_channels, out_channels,identity_downsample,stride))
+            self.in_channels = out_channels*4
+
+            for i in range(num_residual_blocks - 1):
+                layers.append(block(self.in_channels, out_channels))
+
+            return nn.Sequential(*layers)
+
+def ResNet50(img_channels=64, num_classes=10):
+    return ResNet(blk, [3, 4, 6, 3], img_channels, num_classes)
+
+def ResNet101(img_channels=64, num_classes=10):
+    return ResNet(blk, [3, 4, 23, 3], img_channels, num_classes)
+
+def ResNet152(img_channels=64, num_classes=10):
+    return ResNet(blk, [3, 8, 36, 3], img_channels, num_classes)
+
+del model
+torch.cuda.empty_cache()
+def test():
+
+    net = ResNet50()
+    optimizer = optim.Adam(net.parameters(), lr=1e-3)
+    criterion = nn.CrossEntropyLoss()
+
+    
+    
+    x = sample_features
+    x = x.to(device)
+    label = labels
+    label = label.to(device)
+
+
+    net.train()
+    for epoch in range(20):
+        optimizer.zero_grad()
+        y = net(x)
+
+        print(y.shape)
+        print(label.shape)
+        loss = criterion(y, label)
+
+        loss.backward()
+
+        optimizer.step()
+
+        prediction = torch.argmax(y, dim=1)
+
+        print(
+            f"Epoch [{epoch+1}/20], "
+            f"Loss: {loss.item():.4f}, "
+            f"Prediction: {prediction}, "
+            f"Label: {label}"
+        )
+        print(prediction,
+            loss.item(),
+            label
+            )
+    net.eval()
+
+    with torch.no_grad():
+
+        y = net(x)
+
+        loss = criterion(y, label)
+
+        prediction = torch.argmax(y, dim=1)
+
+    print(
+        "Final prediction:",
+        prediction,
+        "Final loss:",
+        loss.item(),
+        "Actual label:",
+        label
+    )
+
+test()
