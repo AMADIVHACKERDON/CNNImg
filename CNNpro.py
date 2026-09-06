@@ -437,23 +437,5 @@ def test():
             loss.item(),
             label
             )
-    net.eval()
-
-    with torch.no_grad():
-
-        y = net(x)
-
-        loss = criterion(y, label)
-
-        prediction = torch.argmax(y, dim=1)
-
-    print(
-        "Final prediction:",
-        prediction,
-        "Final loss:",
-        loss.item(),
-        "Actual label:",
-        label
-    )
 
 test()
